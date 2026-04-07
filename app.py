@@ -30,23 +30,28 @@ class Database:
     
     # User operations
     def create_user(self, username: str, name: str) -> int:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('INSERT INTO users (username, name) VALUES (?, ?)', (username, name))
-            return cursor.lastrowid
+        with self.driver.session() as session:
+            # Get next id
+            result = session.execute_read(lambda tx: tx.run("MATCH (u:User) RETURN u.id ORDER BY u.id DESC LIMIT 1").single())
+            next_id = (result[0] + 1) if result else 1
+            session.execute_write(lambda tx: tx.run(
+                "CREATE (u:User {id: $id, username: $username, name: $name})",
+                id=next_id, username=username, name=name
+            ))
+            return next_id
     
     def get_user(self, user_id: int) -> Optional[dict]:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT id, username, name FROM users WHERE id = ?', (user_id,))
-            row = cursor.fetchone()
-            return {'id': row[0], 'username': row[1], 'name': row[2]} if row else None
+        with self.driver.session() as session:
+            result = session.execute_read(lambda tx: tx.run(
+                "MATCH (u:User {id: $user_id}) RETURN u.id, u.username, u.name",
+                user_id=user_id
+            ).single())
+            return {'id': result[0], 'username': result[1], 'name': result[2]} if result else None
     
     def get_all_users(self) -> List[dict]:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT id, username, name FROM users')
-            return [{'id': row[0], 'username': row[1], 'name': row[2]} for row in cursor.fetchall()]
+        with self.driver.session() as session:
+            results = session.execute_read(lambda tx: tx.run("MATCH (u:User) RETURN u.id, u.username, u.name"))
+            return [{'id': record[0], 'username': record[1], 'name': record[2]} for record in results]
     
     # Post operations
     def create_post(self, user_id: int, content: str) -> int:
