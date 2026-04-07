@@ -109,42 +109,43 @@ class Database:
     
     # Follow operations
     def follow_user(self, follower_id: int, followee_id: int) -> bool:
-        with self._get_connection() as conn:
+        with self.driver.session() as session:
             try:
-                conn.execute('INSERT INTO followers (follower_id, followee_id) VALUES (?, ?)', 
-                           (follower_id, followee_id))
+                session.execute_write(lambda tx: tx.run(
+                    "MATCH (f:User {id: $follower_id}), (e:User {id: $followee_id}) "
+                    "MERGE (f)-[:FOLLOWS]->(e)",
+                    follower_id=follower_id, followee_id=followee_id
+                ))
                 return True
-            except sqlite3.IntegrityError:
+            except Exception:
                 return False
     
     def get_followers(self, user_id: int) -> List[dict]:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT u.id, u.username, u.name 
-                FROM followers f 
-                JOIN users u ON f.follower_id = u.id
-                WHERE f.followee_id = ?
-            ''', (user_id,))
-            return [{'id': row[0], 'username': row[1], 'name': row[2]} for row in cursor.fetchall()]
+        with self.driver.session() as session:
+            results = session.execute_read(lambda tx: tx.run(
+                "MATCH (u:User {id: $user_id})<-[:FOLLOWS]-(f:User) "
+                "RETURN f.id, f.username, f.name",
+                user_id=user_id
+            ))
+            return [{'id': record[0], 'username': record[1], 'name': record[2]} for record in results]
     
     def get_following(self, user_id: int) -> List[dict]:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT u.id, u.username, u.name 
-                FROM followers f 
-                JOIN users u ON f.followee_id = u.id
-                WHERE f.follower_id = ?
-            ''', (user_id,))
-            return [{'id': row[0], 'username': row[1], 'name': row[2]} for row in cursor.fetchall()]
+        with self.driver.session() as session:
+            results = session.execute_read(lambda tx: tx.run(
+                "MATCH (u:User {id: $user_id})-[:FOLLOWS]->(f:User) "
+                "RETURN f.id, f.username, f.name",
+                user_id=user_id
+            ))
+            return [{'id': record[0], 'username': record[1], 'name': record[2]} for record in results]
 
     def unfollow_user(self, follower_id: int, followee_id: int) -> bool:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('DELETE FROM followers WHERE follower_id = ? AND followee_id = ?', 
-                        (follower_id, followee_id))
-            return cursor.rowcount > 0
+        with self.driver.session() as session:
+            result = session.execute_write(lambda tx: tx.run(
+                "MATCH (f:User {id: $follower_id})-[r:FOLLOWS]->(e:User {id: $followee_id}) "
+                "DELETE r",
+                follower_id=follower_id, followee_id=followee_id
+            ))
+            return result.consume().counters.relationships_deleted > 0
 
 # ======================
 # Web Application
