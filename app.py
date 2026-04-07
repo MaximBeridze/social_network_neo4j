@@ -1,6 +1,7 @@
 # social_network.py
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session
 import sqlite3
+import datetime
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -23,6 +24,10 @@ class Database:
             session.execute_write(lambda tx: tx.run(
                 "CREATE CONSTRAINT unique_username IF NOT EXISTS "
                 "FOR (u:User) REQUIRE u.username IS UNIQUE"
+            ))
+            session.execute_write(lambda tx: tx.run(
+                "CREATE CONSTRAINT unique_post_id IF NOT EXISTS "
+                "FOR (p:Post) REQUIRE p.id IS UNIQUE"
             ))
     
     def _get_connection(self):
@@ -55,27 +60,33 @@ class Database:
     
     # Post operations
     def create_post(self, user_id: int, content: str) -> int:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('INSERT INTO posts (user_id, content) VALUES (?, ?)', (user_id, content))
-            return cursor.lastrowid
+        with self.driver.session() as session:
+            # Get next post id
+            result = session.execute_read(lambda tx: tx.run("MATCH (p:Post) RETURN p.id ORDER BY p.id DESC LIMIT 1").single())
+            next_id = (result[0] + 1) if result else 1
+            timestamp = datetime.datetime.now()
+            session.execute_write(lambda tx: tx.run(
+                "MATCH (u:User {id: $user_id}) "
+                "CREATE (u)-[:POSTED]->(p:Post {id: $id, content: $content, timestamp: $timestamp})",
+                user_id=user_id, id=next_id, content=content, timestamp=timestamp
+            ))
+            return next_id
     
     def get_posts_by_user(self, user_id: int) -> List[dict]:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT p.id, p.content, p.timestamp, u.username, u.name 
-                FROM posts p JOIN users u ON p.user_id = u.id 
-                WHERE p.user_id = ?
-                ORDER BY p.timestamp DESC
-            ''', (user_id,))
+        with self.driver.session() as session:
+            results = session.execute_read(lambda tx: tx.run(
+                "MATCH (u:User {id: $user_id})-[:POSTED]->(p:Post) "
+                "RETURN p.id, p.content, p.timestamp, u.username, u.name "
+                "ORDER BY p.timestamp DESC",
+                user_id=user_id
+            ))
             return [{
-                'id': row[0],
-                'content': row[1],
-                'timestamp': row[2],
-                'username': row[3],
-                'name': row[4]
-            } for row in cursor.fetchall()]
+                'id': record[0],
+                'content': record[1],
+                'timestamp': record[2],
+                'username': record[3],
+                'name': record[4]
+            } for record in results]
     
     def get_feed(self, user_id: int) -> List[dict]:
         with self._get_connection() as conn:
