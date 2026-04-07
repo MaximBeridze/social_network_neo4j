@@ -7,40 +7,23 @@ from typing import List, Optional
 # ======================
 # Database Access Layer
 # ======================
+from neo4j import GraphDatabase
+
 class Database:
-    def __init__(self, db_name='social_network.db'):
-        self.db_name = db_name
+    def __init__(self, uri='neo4j://localhost:7687', user='neo4j', password='password'):
+        self.driver = GraphDatabase.driver(uri, auth=(user, password))
         self._init_db()
-    
+
     def _init_db(self):
-        with self._get_connection() as conn:
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT UNIQUE NOT NULL,
-                    name TEXT NOT NULL
-                )
-            ''')
-            
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS posts (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    content TEXT NOT NULL,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY(user_id) REFERENCES users(id)
-                )
-            ''')
-            
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS followers (
-                    follower_id INTEGER NOT NULL,
-                    followee_id INTEGER NOT NULL,
-                    PRIMARY KEY(follower_id, followee_id),
-                    FOREIGN KEY(follower_id) REFERENCES users(id),
-                    FOREIGN KEY(followee_id) REFERENCES users(id)
-                )
-            ''')
+        with self.driver.session() as session:
+            session.execute_write(lambda tx: tx.run(
+                "CREATE CONSTRAINT unique_user_id IF NOT EXISTS "
+                "FOR (u:User) REQUIRE u.id IS UNIQUE"
+            ))
+            session.execute_write(lambda tx: tx.run(
+                "CREATE CONSTRAINT unique_username IF NOT EXISTS "
+                "FOR (u:User) REQUIRE u.username IS UNIQUE"
+            ))
     
     def _get_connection(self):
         return sqlite3.connect(self.db_name)
